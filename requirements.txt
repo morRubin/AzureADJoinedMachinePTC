@@ -1,0 +1,3 @@
+PythonForWindows
+impacket
+smbprotocol
