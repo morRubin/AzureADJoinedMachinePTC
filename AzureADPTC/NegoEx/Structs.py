@@ -252,10 +252,7 @@ def generateInitiatorNego():
                                 112, # should be calculated as all initiator nego
                                 guidIn16Bytes
                                 )
-    print(bytes(header))
-    print(Pack(header))
 
-    print(Pack(authScheme))
     initNego = _WST_HELLO_MESSAGE(header,
                                    randomIn32Bytes, # should be generateRandom(),
                                    0,
@@ -263,8 +260,6 @@ def generateInitiatorNego():
                                    extenstion,
                                    authschemIn16Bytes)
 
-    #header['cbMessageLength'] = len(initNego)
-    print(Pack(initNego))
     return Pack(initNego)
 
 def generateMetaData():
@@ -313,8 +308,6 @@ def generateMetaData():
                                         authschemIn16Bytes,
                                         exchange)
 
-
-    print(Pack(exchangeMsg))
     return Pack(exchangeMsg) + data
 
 def generateApRequest(): # same struct as meta data
@@ -364,7 +357,6 @@ def generateApRequest(): # same struct as meta data
                                        exchange)
 
     return Pack(ApRequestMsg) + data
-    print(Pack(ApRequestMsg))
 
 def splitStructs(data, nego):
     # each struct statswith NEGOEXTS
