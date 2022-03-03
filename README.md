@@ -27,7 +27,7 @@ Main.py --usercert "Gadmin.pfx" --certpass mor --remoteip 192.168.1.2
 MIT
 
 ## Credits
-* [Benjamin Delpy](https://twitter.com/gentilkiwi) for implementing everything in [kekeo](https://github.com/gentilkiwi/kekeo)
+* [Benjamin Delpy](https://twitter.com/gentilkiwi) for implementing Kerberos parts in [kekeo](https://github.com/gentilkiwi/kekeo)
 * [SkelSec](https://twitter.com/skelsec) for [minikerberos](https://github.com/skelsec/minikerberos/tree/master/minikerberos)
 * Alberto Solino and the team at SecureAuthCorp for [impacket](https://github.com/SecureAuthCorp/impacket)
 * [Dirk Jan](https://twitter.com/_dirkjan) for implementing PKINIT on Pyhthon3 [PKINITtools](https://github.com/dirkjanm/PKINITtools)
