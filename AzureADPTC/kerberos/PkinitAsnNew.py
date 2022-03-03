@@ -1,9 +1,5 @@
-from minikerberos.protocol.asn1_structs import AS_REQ, AS_REP, AP_REQ
 from asn1crypto import core
-from pyasn1.type import univ
-from pyasn1.type.namedtype import NamedType, NamedTypes
-from pyasn1.type.tag import tagFormatSimple, tagClassApplication, Tag
-from pyasn1.type.univ import Sequence
+from minikerberos.protocol.asn1_structs import AP_REQ, AS_REP, AS_REQ
 
 
 class SequenceOfObjectIdentifier(core.SequenceOf):

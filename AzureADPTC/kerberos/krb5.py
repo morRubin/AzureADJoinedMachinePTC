@@ -1,30 +1,22 @@
+import datetime
+import hashlib
+
+from asn1crypto import algos, cms, core, keys
 from asn1crypto.cms import SignedData
 from cryptography.hazmat.backends import default_backend
-from impacket.krb5.crypto import Key, _enctype_table
-from impacket.krb5.crypto import Enctype
-
+from cryptography.hazmat.primitives.asymmetric import dh
+from impacket.krb5.crypto import Enctype, Key, _enctype_table
+from minikerberos.protocol.asn1_structs import (
+    AS_REQ, KDC_REQ_BODY, EncASRepPart, HostAddress, KDCOptions, KerberosResponse, PrincipalName)
 from minikerberos.protocol.constants import PaDataType
 from minikerberos.protocol.errors import KerberosError
+from minikerberos.protocol.rfc4556 import PA_PK_AS_REP, PA_PK_AS_REQ, AuthPack, KDCDHKeyInfo, PKAuthenticator
+from oscrypto.asymmetric import load_private_key, rsa_pkcs1v15_sign
 from oscrypto.keys import parse_pkcs12
-from oscrypto.asymmetric import rsa_pkcs1v15_sign, load_private_key
-
-from minikerberos.protocol.rfc4556 import PKAuthenticator, AuthPack, PA_PK_AS_REQ, PA_PK_AS_REP, KDCDHKeyInfo
-
-from pyasn1.codec.der.encoder import encode
 from pyasn1.codec.der.decoder import decode
+from pyasn1.codec.der.encoder import encode
 
-from cryptography.hazmat.primitives.asymmetric import dh
-
-
-from minikerberos.protocol.asn1_structs import KDC_REQ_BODY, PrincipalName, HostAddress, \
-    KDCOptions, EncASRepPart, AS_REQ, KerberosResponse
-
-from asn1crypto import keys, cms, algos, core
-
-import hashlib
-import datetime
-
-from .PkinitAsnNew import SPNEGO_PKINIT_REP, SPNEGO_PKINIT_AS_REP
+from .PkinitAsnNew import SPNEGO_PKINIT_AS_REP, SPNEGO_PKINIT_REP
 
 
 def sign_authpack_native(data, privkey, certificate, wrap_signed=False):

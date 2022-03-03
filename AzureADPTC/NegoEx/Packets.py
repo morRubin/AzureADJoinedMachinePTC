@@ -3,13 +3,12 @@ import random
 import string
 
 from impacket.krb5.constants import ChecksumTypes
-from impacket.krb5.crypto import Key
-from impacket.krb5.crypto import _checksum_table, Enctype
+from impacket.krb5.crypto import Enctype, Key, _checksum_table
 from impacket.uuid import generate
 
-from .Structs import _WST_EXTENSION_VECTOR, WST_MESSAGE_SIGNATURE, _WST_AUTH_SCHEME_VECTOR, WST_MESSAGE_HEADER, \
-    _WST_HELLO_MESSAGE, \
-    WST_EXCHANGE_MESSAGE, WST_BYTE_VECTOR, WST_MESSAGE_TYPE, _WST_CHECKSUM, _WST_VERIFY_MESSAGE, Pack
+from .Structs import (
+    _WST_AUTH_SCHEME_VECTOR, _WST_CHECKSUM, _WST_EXTENSION_VECTOR, _WST_HELLO_MESSAGE, _WST_VERIFY_MESSAGE,
+    WST_BYTE_VECTOR, WST_EXCHANGE_MESSAGE, WST_MESSAGE_HEADER, WST_MESSAGE_SIGNATURE, WST_MESSAGE_TYPE, Pack)
 
 
 def generateRandom(stringLength=32):

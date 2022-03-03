@@ -1,11 +1,12 @@
-import sys
-import os
-import cmd
-from threading import Thread, Lock
 import argparse
+import cmd
+import os
 import random
 import string
+import sys
 import time
+from threading import Lock, Thread
+
 from six import PY3
 
 PACKAGE_PARENT = '..'
@@ -13,18 +14,13 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(os.path.join(os.getcwd(), os.path.
 sys.path.append(os.path.normpath(os.path.join(SCRIPT_DIR, PACKAGE_PARENT)))
 
 
+import transport
+from impacket import smb
+from impacket.examples import remcomsvc, serviceinstall
+from impacket.structure import Structure
+from smb3 import SMB2_DIALECT_21
 from smbconnection import SMBConnection
 
-
-from impacket.structure import Structure
-from impacket.examples import remcomsvc
-
-from impacket import smb
-
-import transport
-from impacket.examples import serviceinstall
-
-from smb3 import SMB2_DIALECT_21
 
 class RemComMessage(Structure):
     structure = (

@@ -1,11 +1,11 @@
 import ctypes
 import random
 import string
-import uuid
+from enum import Enum
 
 from asn1crypto import core
 from minikerberos.protocol.asn1_structs import TAG, PrincipalName
-from enum import Enum
+
 
 class PAC_CREDENTIAL_INFO(ctypes.Structure):
     _fields_ = [("Version", ctypes.c_ulong),

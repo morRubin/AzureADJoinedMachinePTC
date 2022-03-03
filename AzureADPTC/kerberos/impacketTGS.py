@@ -2,25 +2,18 @@ import datetime
 
 import minikerberos.protocol.asn1_structs
 from asn1crypto import core
-
+from impacket.krb5 import constants
+from impacket.krb5.asn1 import AP_REQ, AS_REP, Authenticator, AuthorizationData, seq_set
+from impacket.krb5.constants import ChecksumTypes
+from impacket.krb5.crypto import Enctype, Key, _checksum_table
+from impacket.krb5.gssapi import CheckSumField
+from impacket.krb5.types import KerberosTime, Principal, Ticket
 from minikerberos.protocol.mskile import KERB_AD_RESTRICTION_ENTRYS
 from minikerberos.protocol.rfc_iakerb import KRB_FINISHED
 from pyasn1.codec.der import decoder, encoder
-from pyasn1.type import univ
 
-from impacket.krb5.crypto import _checksum_table, Enctype
-from impacket.krb5.constants import ChecksumTypes
-from impacket.krb5.asn1 import AP_REQ, AS_REP, Authenticator, seq_set, AuthorizationData
-from impacket.krb5.types import KerberosTime, Principal, Ticket
-from impacket.krb5.gssapi import CheckSumField
-from impacket.krb5 import constants
-from impacket.krb5.crypto import Key
-
-
+from ..NegoEx.Structs import LSAP_TOKEN_INFO_INTEGRITY, GenerateExtensions, Pack
 from .PkinitAsnNew import SPNEGO_PKINIT_AP_REQ
-
-
-from ..NegoEx.Structs import LSAP_TOKEN_INFO_INTEGRITY, Pack, GenerateExtensions
 
 
 def getKerberosTGS(cipher, sessionKey, tgtResponse, gssAPIChecksumBuffer):
