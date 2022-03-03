@@ -24,7 +24,7 @@ except ImportError:
 
 from impacket import ntlm
 from impacket.dcerpc.v5.rpcrt import DCERPCException, DCERPC_v5, DCERPC_v4
-from rpch import RPCProxyClient, RPCProxyClientException, RPC_OVER_HTTP_v1, RPC_OVER_HTTP_v2
+from impacket.dcerpc.v5.rpch import RPCProxyClient, RPCProxyClientException, RPC_OVER_HTTP_v1, RPC_OVER_HTTP_v2
 from smbconnection import SMBConnection
 
 class DCERPCStringBinding:

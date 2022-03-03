@@ -1,11 +1,16 @@
-from AzureADPTC.NegoEx.Structs import _WST_EXTENSION_VECTOR, WST_MESSAGE_SIGNATURE, _WST_AUTH_SCHEME_VECTOR, WST_MESSAGE_HEADER, _WST_HELLO_MESSAGE,\
-    WST_EXCHANGE_MESSAGE, WST_BYTE_VECTOR, WST_MESSAGE_TYPE, _WST_CHECKSUM, _WST_VERIFY_MESSAGE, Pack
-import string, random, ctypes
+import ctypes
+import random
+import string
+
+from impacket.krb5.constants import ChecksumTypes
+from impacket.krb5.crypto import Key
+from impacket.krb5.crypto import _checksum_table, Enctype
 from impacket.uuid import generate
 
-from impacket.krb5.crypto import _checksum_table, Enctype
-from impacket.krb5.crypto import Key, _enctype_table, InvalidChecksum
-from impacket.krb5.constants import KERB_NON_KERB_CKSUM_SALT, ChecksumTypes
+from .Structs import _WST_EXTENSION_VECTOR, WST_MESSAGE_SIGNATURE, _WST_AUTH_SCHEME_VECTOR, WST_MESSAGE_HEADER, \
+    _WST_HELLO_MESSAGE, \
+    WST_EXCHANGE_MESSAGE, WST_BYTE_VECTOR, WST_MESSAGE_TYPE, _WST_CHECKSUM, _WST_VERIFY_MESSAGE, Pack
+
 
 def generateRandom(stringLength=32):
     letters = string.ascii_lowercase
@@ -16,9 +21,9 @@ toHex = lambda x: "".join([hex(ord(c))[2:].zfill(2) for c in x])
 
 class Negoex:
     def __init__(self):
-        self.conversation_id = generate().encode('hex')
+        self.conversation_id = generate().hex()
         self.authscheme = '5c33530deaf90d4db2ec4ae3786ec308'
-        self.random = generateRandom().encode('utf-8').encode('hex')
+        self.random = generateRandom().encode('utf-8').hex()
         self.negoexHeader = int(toHex("NEGOEXTS"),16)
         PconvId = [int(a+b,16) for a,b in zip(self.conversation_id[0::2],self.conversation_id[1::2])]
         PauthScheme = [int(a + b, 16) for a, b in zip(self.authscheme[0::2], self.authscheme[1::2])]
@@ -145,7 +150,7 @@ class Negoex:
                                      )
 
         checksumvector2 = WST_BYTE_VECTOR(0,
-                                          len(checksumToSend) / 2,
+                                          int(len(checksumToSend) / 2),
                                           0)
 
         checksum2 = _WST_CHECKSUM(0,
@@ -162,12 +167,12 @@ class Negoex:
                                      self.sequenceNum,
                                      # changed to 80 as the first header and second
                                      80,#ctypes.sizeof(header2) + 24,
-                                     ctypes.sizeof(verify2) + len(checksumToSend) / 2,
+                                     int(ctypes.sizeof(verify2) + len(checksumToSend) / 2),
                                      self.convId16Byte
                                      )
 
         checksumvector = WST_BYTE_VECTOR(ctypes.sizeof(verify2),
-                                          len(checksumToSend) / 2,
+                                          int(len(checksumToSend) / 2),
                                           0)
 
         checksum = _WST_CHECKSUM(ctypes.sizeof(checksum2),
@@ -184,15 +189,16 @@ class Negoex:
 
     def negoexAsRequest(self, metaData, data):
         # create data from kerberos as request and send to generateAPRequest
-        return self.generateInitiatorNego() + self.generateMetaData(metaData) + self.generateAPRequest(data)
+        initNego = self.generateInitiatorNego()
+        return initNego + self.generateMetaData(metaData) + self.generateAPRequest(data)
 
     def negoexApRequest(self, data, privData):
         # create data from keberos as normal ap request with data from as response and send it to generateAPRequest
         # create data as checksum of all previous packets to send to generateVerify
         apReq = self.generateAPRequest(data)
         checksumtype = _checksum_table[ChecksumTypes.hmac_sha1_96_aes256.value]
-        keyServer = Key(Enctype.AES256, 'fb3f5b9cb2e387a5815d57e672978a118c22404938b279bbd4e29e1505cac2c3'.decode('hex'))
-        checksumToSend = checksumtype.checksum(keyServer, 25, (privData + apReq).decode('hex')).encode('hex')
+        keyServer = Key(Enctype.AES256, bytes.fromhex('fb3f5b9cb2e387a5815d57e672978a118c22404938b279bbd4e29e1505cac2c3'))
+        checksumToSend = checksumtype.checksum(keyServer, 25, bytes.fromhex(privData + apReq)).hex()
         return apReq + self.generateVerify(checksumToSend=checksumToSend)
 
     def negoexProcess(self):

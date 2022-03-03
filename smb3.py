@@ -32,6 +32,9 @@ import ntpath
 import random
 import string
 import struct
+
+from asn1crypto import core
+from impacket.krb5.gssapi import KRB5_AP_REQ
 from six import indexbytes, b
 from binascii import a2b_hex
 from contextlib import contextmanager
@@ -813,30 +816,27 @@ class SMB3:
 
         # Importing down here so pyasn1 is not required if kerberos is not used.
         from AzureADPTC.Helper import NegoExHelper
-        from pyasn1.codec.der import decoder, encoder
-        import datetime
 
         negoExHelper = NegoExHelper(self.__userCert, self.__certPass, remoteComputer)
         NegoExKerberosAsReq = negoExHelper.GenerateNegoExKerberosAs()
 
-        from AzureADPTC.kerberos.PkinitAsn import SPNEGO_SECURITYBLOB, NegotiationToken
-        from pyasn1.codec.der.encoder import encode
-        from smbprotocol.session import SMB2SessionSetupRequest
-        a = SMB2SessionSetupRequest()
-        blob = SPNEGO_SECURITYBLOB()
-        blob['Oid'] = '1.3.6.1.5.5.2'
-        blob['SimpleProtectedNego']['mechTypes'][0] = '1.3.6.1.4.1.311.2.2.30'
-        blob['SimpleProtectedNego']['mechTypes'][1] = '1.3.6.1.4.1.311.2.2.10'
-        blob['SimpleProtectedNego']['SpNego'] = bytearray.fromhex(NegoExKerberosAsReq)
-        
-        a.fields['buffer'].set_value(bytes(encode(blob)))
-        a.fields['security_mode'].set_value(1)
-        
+        blob = SPNEGO_NegTokenInit()
+
+        blob['MechTypes'] = [TypesMech['NEGOEX - SPNEGO Extended Negotiation Security Mechanism'],
+                             TypesMech['NTLMSSP - Microsoft NTLM Security Support Provider']]
+        blob['MechToken'] = bytes.fromhex(NegoExKerberosAsReq)
+        sessionSetup = SMB2SessionSetup()
+
+        sessionSetup['SecurityMode'] = 1
+        sessionSetup['SecurityBufferLength'] = len(blob)
+        sessionSetup['Buffer'] = blob.getData()
+
+        self.SMB_PACKET = SMB2Packet
         packet            = self.SMB_PACKET()
         packet['Command'] = SMB2_SESSION_SETUP
         packet['Flags']   = 16
         packet['process_id']   = 0xfeff
-        packet['Data']    = a.pack()
+        packet['Data']    = sessionSetup
 
         packetID = self.sendSMB(packet)
         ans = self.recvSMB(packetID)
@@ -846,19 +846,20 @@ class SMB3:
             self._Session['SigningRequired'] = self._Connection['RequireSigning']
 
             NegoExKerberosApReq = negoExHelper.GenerateNegoExKerberosAp(ans)
-            a = SMB2SessionSetupRequest()
-            blob = NegotiationToken()
-            blob['NegTokenResp']['negState'] = 'accept-incomplete'
-            blob['NegTokenResp']['responseToken'] = bytearray.fromhex(NegoExKerberosApReq)
-            
-            a.fields['buffer'].set_value(bytes(encode(blob)))
-            a.fields['security_mode'].set_value(1)
-            a.fields['capabilities'].set_value(1)
+            sessionSetup = SMB2SessionSetup()
+            blob = SPNEGO_NegTokenResp()
+
+            blob['negState'] = 'accept-incomplete'
+            blob['ResponseToken'] = bytearray.fromhex(NegoExKerberosApReq)
+
+            sessionSetup['SecurityMode'] = 1
+            sessionSetup['SecurityBufferLength'] = len(blob)
+            sessionSetup['Buffer'] = blob.getData()
             
             packet            = self.SMB_PACKET()
             packet['Command'] = SMB2_SESSION_SETUP
             packet['Flags']   = 16
-            packet['Data']    = a.pack()
+            packet['Data']    = sessionSetup
 
             packetID = self.sendSMB(packet)
             ans = self.recvSMB(packetID)

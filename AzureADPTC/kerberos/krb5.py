@@ -1,256 +1,196 @@
-import sys
-from socket import socket
-from random import getrandbits
-from time import time, localtime, strftime
-import hashlib
-
-from pyasn1.type.univ import Integer, Sequence, SequenceOf, OctetString, BitString, Boolean
-from pyasn1.type.char import GeneralString
-from pyasn1.type.useful import GeneralizedTime
-from pyasn1.type.tag import Tag, tagClassContext, tagClassApplication, tagFormatSimple
-from pyasn1.type.namedtype import NamedTypes, NamedType, OptionalNamedType
-from pyasn1.codec.der.encoder import encode
-from pyasn1.codec.der.decoder import decode
-from pyasn1.type import univ
-
-from struct import pack, unpack
-
-from impacket.krb5.crypto import Key, _enctype_table, InvalidChecksum
-from impacket.krb5 import types
+from asn1crypto.cms import SignedData
+from cryptography.hazmat.backends import default_backend
+from impacket.krb5.crypto import Key, _enctype_table
 from impacket.krb5.crypto import Enctype
 
-import OpenSSL
+from minikerberos.protocol.constants import PaDataType
+from minikerberos.protocol.errors import KerberosError
+from oscrypto.keys import parse_pkcs12
+from oscrypto.asymmetric import rsa_pkcs1v15_sign, load_private_key
 
-from AzureADPTC.kerberos.PkinitAsn import *
+from minikerberos.protocol.rfc4556 import PKAuthenticator, AuthPack, PA_PK_AS_REQ, PA_PK_AS_REP, KDCDHKeyInfo
 
-import binascii
-import struct
+from pyasn1.codec.der.encoder import encode
+from pyasn1.codec.der.decoder import decode
 
-import six
+from cryptography.hazmat.primitives.asymmetric import dh
+
+
+from minikerberos.protocol.asn1_structs import KDC_REQ_BODY, PrincipalName, HostAddress, \
+    KDCOptions, EncASRepPart, AS_REQ, KerberosResponse
+
+from asn1crypto import keys, cms, algos, core
+
 import hashlib
 import datetime
 
-from AzureADPTC.kerberos.pkSignDecrypt.SignAuthPack import *
-
-from cryptography.hazmat.backends.interfaces import DHBackend
-from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.backends import default_backend
-
-def _c(n, t):
-    return t.clone(tagSet=t.tagSet + Tag(tagClassContext, tagFormatSimple, n))
-
-NT_UNKNOWN = 0
-NT_PRINCIPAL = 1
-NT_SRV_INST = 2
-NT_SRV_HST = 3
-NT_SRV_XHST = 4
-NT_UID = 5
-NT_X500_PRINCIPAL = 6
-NT_SMTP_NAME = 7
-NT_ENTERPRISE = 10
+from .PkinitAsnNew import SPNEGO_PKINIT_REP, SPNEGO_PKINIT_AS_REP
 
 
-AD_IF_RELEVANT = 1
-AD_WIN2K_PAC = 128
+def sign_authpack_native(data, privkey, certificate, wrap_signed=False):
+    """
+    Creating PKCS7 blob which contains the following things:
+    1. 'data' blob which is an ASN1 encoded "AuthPack" structure
+    2. the certificate used to sign the data blob
+    3. the singed 'signed_attrs' structure (ASN1) which points to the "data" structure (in point 1)
+    """
 
-def _v(n, t):
-    return t.clone(tagSet=t.tagSet + Tag(tagClassContext, tagFormatSimple, n), cloneValueFlag=True)
+    da = {'algorithm': algos.DigestAlgorithmId('1.3.14.3.2.26')}
 
-def BuildPkinit_pa(user_cert, cert_pass, reqbodyHex, diffieHellmanExchange):
-    paAsReq = PA_PK_AS_REQ()
+    si = {}
+    si['version'] = 'v1'
+    si['sid'] = cms.IssuerAndSerialNumber({
+        'issuer': certificate.issuer,
+        'serial_number': certificate.serial_number,
+    })
 
-    timestamp = (datetime.datetime.utcnow().isoformat()[:-7] + 'Z').replace('-','').replace(':','').replace('T','')
-    authpack = AuthPack()
+    si['digest_algorithm'] = algos.DigestAlgorithm(da)
+    si['signed_attrs'] = [
+        cms.CMSAttribute({'type': 'content_type', 'values': ['1.3.6.1.5.2.3.1']}),
+        # indicates that the encap_content_info's authdata struct (marked with OID '1.3.6.1.5.2.3.1' is signed )
+        cms.CMSAttribute({'type': 'message_digest', 'values': [hashlib.sha1(data).digest()]}),
+        ### hash of the data, the data itself will not be signed, but this block of data will be.
+    ]
+    si['signature_algorithm'] = algos.SignedDigestAlgorithm({'algorithm': '1.2.840.113549.1.1.1'})
+    si['signature'] = rsa_pkcs1v15_sign(privkey, cms.CMSAttributes(si['signed_attrs']).dump(), "sha1")
 
-    checksum = hashlib.sha1(reqbodyHex).hexdigest()
-    
-    authpack['pkAuthenticator']['cusec'] = 275425
-    authpack['pkAuthenticator']['ctime'] = timestamp
-    authpack['pkAuthenticator']['nonce'] = 0
-    authpack['pkAuthenticator']['paChecksum'] = bytearray.fromhex(checksum) #reqBodyChecksum
+    ec = {}
+    ec['content_type'] = '1.3.6.1.5.2.3.1'
+    ec['content'] = data
 
-    aidentifier2 = AlgorithmIdentifier()
+    sd = {}
+    sd['version'] = 'v3'
+    sd['digest_algorithms'] = [algos.DigestAlgorithm(da)]  # must have only one
+    sd['encap_content_info'] = cms.EncapsulatedContentInfo(ec)
+    sd['certificates'] = [certificate]
+    sd['signer_infos'] = cms.SignerInfos([cms.SignerInfo(si)])
 
-    seq = univ.Sequence(componentType=namedtype.NamedTypes(
-        namedtype.NamedType('1', univ.Integer()),
-        namedtype.NamedType('2', univ.Integer())
-    ))  # public key for DH y = g^x mod p
-    
-    # longPrime- n or p
-    seq['1'] = int('00ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece65381ffffffffffffffff', 16)  # safe prime
+    if wrap_signed is True:
+        ci = {}
+        ci['content_type'] = '1.2.840.113549.1.7.2'  # signed data OID
+        ci['content'] = cms.SignedData(sd)
+        return cms.ContentInfo(ci).dump()
 
-    # generator- g
-    seq['2'] = 2
+    return cms.SignedData(sd).dump()
 
-    aidentifier2['algorithm'] = '1.2.840.10046.2.1'
-    aidentifier2['parameters'] = seq
 
-    # client public key as g^privateKey mod n
-    subjectPublicKey = '0e64a81b095929c181cf8037ef49d5b12ac1e1b192b58b3309c1165d5a42f1e588973bc41a47381c1347f72e9573c1458bb1e818a1b03036860ac539e081461eaab3c80c6099ea8c1552f0b146f125f300da3e776b3b298d31b5a564a26918bbe1d1f3a9aafea80f2b6bb20327aeb6e4c61ab6d55d412d2e2290f73b10937b69'
-    sub = '80000000000000000000000000000000000'
-    subjectPublicKeyHex = '038184000281800e64a81b095929c181cf8037ef49d5b12ac1e1b192b58b3309c1165d5a42f1e588973bc41a47381c1347f72e9573c1458bb1e818a1b03036860ac539e081461eaab3c80c6099ea8c1552f0b146f125f300da3e776b3b298d31b5a564a26918bbe1d1f3a9aafea80f2b6bb20327aeb6e4c61ab6d55d412d2e2290f73b10937b69'
+def BuildPkinit_pa(req_body, now, diffieHellmanExchange, privKey, cert):
+    authenticator = {'cusec': now.microsecond, 'ctime': now.replace(microsecond=0), 'nonce': 0,
+                'paChecksum': hashlib.sha1(req_body.dump()).digest()}
 
-    # added BitString - 03 and then sizes 81, 85 and encapsulation 00 to Integer
-    encodedPublic = encode(univ.Integer(diffieHellmanExchange[1].public_key().public_numbers().y)).encode('hex')
-    sizeWithoutTags = str(hex(len(hex(diffieHellmanExchange[1].public_key().public_numbers().y)[2:-1]) / 2 + 1)[2:])
-    sizeWithTags = str(hex(len(encodedPublic) / 2 + 1)[2:])
+    dp = {'p': diffieHellmanExchange.p, 'g': diffieHellmanExchange.g, 'q': 0}
 
-                           #sizeWithoutTags
-    encodedPublic = '03' + '81' + sizeWithTags + '00' + encodedPublic
-    
-    authpack['clientPublicValue']['algorithm'] = aidentifier2
-    authpack['clientPublicValue']['subjectPublicKey'] = bytearray.fromhex(encodedPublic)
+    pka = {'algorithm': '1.2.840.10046.2.1', 'parameters': keys.DomainParameters(dp)}
 
-    dhNonce = '6B328FA66EEBDFD3D69ED34E5007776AB30832A2ED1DCB1699781BFE0BEDF87A'
-    authpack['clientDHNonce'] = bytearray.fromhex(dhNonce)
-    
-    authPackData = encode(authpack).encode('hex')
+    spki = {'algorithm': keys.PublicKeyAlgorithm(pka), 'public_key': diffieHellmanExchange.get_public_key()}
 
-    return sign_msg(user_cert, cert_pass, authPackData)
+    authpack = {'pkAuthenticator': PKAuthenticator(authenticator),
+                'clientPublicValue': keys.PublicKeyInfo(spki),
+                'clientDHNonce': diffieHellmanExchange.dh_nonce}
 
-def build_req_body_NegoEx(remoteComputer, cname, req):   
-    req_body = KdcReqBody()
+    authpack = AuthPack(authpack)
+    return sign_authpack_native(authpack.dump(), privKey, cert, wrap_signed=True)
 
-    # (Forwardable, Proxiable, Renewable, Canonicalize)
-    req_body['kdc-options'] = "'01000000100000010000000000010000'B"
-    req_body['cname']['name-type'] = -128
-    req_body['cname']['name-string'][0] = cname
-    req_body['realm'] = "WELLKNOWN:PKU2U"
-    
-    req_body['sname']['name-type'] = -128
-    req_body['sname']['name-string'][0] = remoteComputer
 
-    req_body['till'] = '20370913024805Z'
-    req_body['rtime'] = '20370913024805Z'
-    req_body['nonce'] = 0 #nonce
-    
-    req_body['etype'][0] = 18
-    req_body['etype'][1] = 17
-    req_body['etype'][2] = 23
-    req_body['etype'][3] = 24
-    req_body['etype'][4] = -135
-    
-    req_body['addresses'][0]['addr-type'] = 20
-    req_body['addresses'][0]['address'] = 'notMimikatz'
+def build_req_body_NegoEx(remoteComputer, cname, now):
+    kdc_req_body_data = {}
+    kdc_req_body_data['kdc-options'] = KDCOptions({'forwardable', 'renewable', 'canonicalize', 'disable-transited-check'})
+    kdc_req_body_data['cname'] = PrincipalName({'name-type': -128, 'name-string': [cname]})
+    kdc_req_body_data['realm'] = "WELLKNOWN:PKU2U"
+    kdc_req_body_data['sname'] = PrincipalName(
+        {'name-type': -128, 'name-string': [remoteComputer]})
+    kdc_req_body_data['till'] = (now + datetime.timedelta(days=1)).replace(microsecond=0)
+    kdc_req_body_data['rtime'] = (now + datetime.timedelta(days=1)).replace(microsecond=0)
+    kdc_req_body_data['nonce'] = 0 #secrets.randbits(31)
+    kdc_req_body_data['etype'] = [18, 17, 23, 24, -135]
+    kdc_req_body_data['addresses'] = [HostAddress({'addr-type': 20, 'address': b'CLIENT6'})]
+    return KDC_REQ_BODY(kdc_req_body_data)
 
-    req['Kerberos']['AsReq']['req-body']['kdc-options'] = "'01000000100000010000000000010000'B"
-    req['Kerberos']['AsReq']['req-body']['cname']['name-type'] = -128
-    req['Kerberos']['AsReq']['req-body']['cname']['name-string'][0] = cname
-    req['Kerberos']['AsReq']['req-body']['realm'] = "WELLKNOWN:PKU2U"
-    
-    req['Kerberos']['AsReq']['req-body']['sname']['name-type'] = -128
-    req['Kerberos']['AsReq']['req-body']['sname']['name-string'][0] = remoteComputer
-
-    req['Kerberos']['AsReq']['req-body']['till'] = '20370913024805Z'
-    req['Kerberos']['AsReq']['req-body']['rtime'] = '20370913024805Z'
-    req['Kerberos']['AsReq']['req-body']['nonce'] = 0 #nonce
-    
-    req['Kerberos']['AsReq']['req-body']['etype'][0] = 18
-    req['Kerberos']['AsReq']['req-body']['etype'][1] = 17
-    req['Kerberos']['AsReq']['req-body']['etype'][2] = 23
-    req['Kerberos']['AsReq']['req-body']['etype'][3] = 24
-    req['Kerberos']['AsReq']['req-body']['etype'][4] = -135
-    
-    req['Kerberos']['AsReq']['req-body']['addresses'][0]['addr-type'] = 20
-    req['Kerberos']['AsReq']['req-body']['addresses'][0]['address'] = 'notMimikatz'
-
-    return req_body
 
 def build_as_req_negoEx(user_cert, cert_pass, remoteComputer, diffieHellmanExchange):
-
     pfx = open(user_cert, 'rb').read()
-    p12 = OpenSSL.crypto.load_pkcs12(pfx, cert_pass)
-    cert = p12.get_certificate()
+    privkeyinfo, certificate, extra_certs = parse_pkcs12(pfx, password=cert_pass.encode())
+    privkey = load_private_key(privkeyinfo)
+    issuer = certificate.issuer.native['common_name']
+    cname = "AzureAD\\" + issuer + "\\" + [i for i in certificate.subject.native['common_name'] if i.startswith('S-1')][0]
 
-    for i in cert.get_subject().get_components():
-        if i[1].startswith("S-1-12"):
-            userSID = i[1]
-        elif len(i[1].split("@")):
-            userName = i[1]
-    userSID = cert.get_subject().CN.encode('utf-8')
-    issuer = cert.get_issuer().CN.encode('utf-8')
+    now = datetime.datetime.now(datetime.timezone.utc)
 
-    cname = "AzureAD\\" + issuer + "\\" + userSID
+    req_body = build_req_body_NegoEx(remoteComputer, cname, now)
 
-    as_req = AsReq()
-    req = SPNEGO_PKINIT()
-    req_body = build_req_body_NegoEx(remoteComputer, cname, req)
-    
-    padata = BuildPkinit_pa(user_cert, cert_pass, encode(req_body), diffieHellmanExchange)
-    
-    newPaData = NegoPAData()
-    newPaData['value'] = bytearray.fromhex(padata[38:])
-    newPaData = encode(newPaData).encode('hex')
+    padata = BuildPkinit_pa(req_body, now, diffieHellmanExchange, privkey, certificate)
 
-    ########################################################################
-    # there is a problem with asn1 encapsulation so i had to manually insert 
-    pack = newPaData[16:]
-    packNewData = newPaData[:8] + '8082' + "{0:0{1}x}".format((len(pack) / 2),4) + pack
+    payload = PA_PK_AS_REQ()
+    payload['signedAuthPack'] = padata
 
-    as_req['pvno'] = 5
-    as_req['msg-type'] = 10
+    pa_data = {'padata-type': PaDataType.PK_AS_REQ.value, 'padata-value': payload.dump()}
 
-    as_req['padata'][0]['padata-type'] = 16
-    as_req['padata'][0]['padata-value'] = bytearray.fromhex(packNewData) #bytearray.fromhex(padata)
-    as_req['req-body'] = _c(4, req_body)
+    asreq = {'pvno': 5, 'msg-type': 10, 'padata': [pa_data], 'req-body': req_body}
 
-    req['kerberos-v5'] = ' 1.3.6.1.5.2.7'
-    req['null'] = univ.Null()
-    req['Kerberos']['AsReq']['pvno'] = 5
-    req['Kerberos']['AsReq']['msg-type'] = 10
-    req['Kerberos']['AsReq']['padata'][0]['padata-type'] = 16
-    req['Kerberos']['AsReq']['padata'][0]['padata-value'] = bytearray.fromhex(packNewData) #bytearray.fromhex(encode(newPaData).encode('hex'))
-    
-    return issuer, encode(req).encode('hex')
+    req = {'kerberos-v5': algos.DigestAlgorithmId('1.3.6.1.5.2.7'), 'null': core.Null(), 'Kerberos': AS_REQ(asreq)}
+    req = SPNEGO_PKINIT_REP(req)
 
-def send_req(req, kdc, port=88):
-    data = encode(req)
-    data = pack('>I', len(data)) + data
-    sock = socket()
-    sock.connect((kdc, port))
-    sock.send(data)
-    return sock
+    return issuer, req.dump().hex()
 
-def recv_rep(sock):
-    data = ''
-    datalen = None
-    while True:
-        rep = sock.recv(8192)
-        if not rep:
-            sock.close()
-            raise IOError('Connection error')
-        data += rep
-        if len(rep) >= 4:
-            if datalen is None:
-                datalen = unpack('>I', rep[:4])[0]
-            if len(data) >= 4 + datalen:
-                sock.close()
-                return data[4:4 + datalen]
 
 def truncate(value, keysize):
-    SHA_DIGEST_LENGTH = 20
-    value = bytearray.fromhex(value)
-    output = ''
+    output = b''
     currentNum = 0
     while len(output) < keysize:
-        currentHexNum = "{0:0{1}x}".format(currentNum,2)
-        m = hashlib.sha1()
-        m.update(bytearray.fromhex(currentHexNum) + value)
-        currentDigest = m.digest()
+        currentDigest = hashlib.sha1(bytes([currentNum]) + value).digest()
         if len(output) + len(currentDigest) > keysize:
             output += currentDigest[:keysize - len(output)]
             break
         output += currentDigest
-        currentNum += 1  
-   
+        currentNum += 1
+
     return output
 
-def decrypt_pk_dh(data, user_cert, cert_pass, diffieHellmanExchange):
+
+def decrypt_pk_dh(data, diffieHellmanExchange):
     try:
-        rep = decode(data, asn1Spec=SPNEGO_PKINIT_REP())[0]['Kerberos']
+        rep = SPNEGO_PKINIT_AS_REP.load(bytes.fromhex(data)).native
     except:
-        err = decode(data, asn1Spec=KRB_ERROR())[0]
-        raise Exception('Kerberos Error ' + ErrorCodes(err['error-code']).name)
+        krb_message = KerberosResponse.load(bytes.fromhex(data))
+        raise KerberosError(krb_message)
+
+    relevantPadata = None
+    for padata in rep['Kerberos']['padata']:
+        if padata['padata-type'] == 17:
+            relevantPadata = PA_PK_AS_REP.load(padata['padata-value']).native
+            break
+
+    if not relevantPadata:
+        raise Exception('No PAdata found with type 17')
+    keyinfo = SignedData.load(relevantPadata['dhSignedData']).native['encap_content_info']
+    if keyinfo['content_type'] != '1.3.6.1.5.2.3.2':
+        raise Exception('Keyinfo content type unexpected value')
+    authdata = KDCDHKeyInfo.load(keyinfo['content']).native
+    pubkey = int(''.join(['1'] + [str(x) for x in authdata['subjectPublicKey']]), 2)
+
+    pubkey = int.from_bytes(core.BitString(authdata['subjectPublicKey']).dump()[7:], 'big', signed=False)
+    shared_key = diffieHellmanExchange.exchange(pubkey)
+
+    server_nonce = relevantPadata['serverDHNonce']
+    fullKey = shared_key + diffieHellmanExchange.dh_nonce + server_nonce
+
+    etype = rep['Kerberos']['enc-part']['etype']
+    cipher = _enctype_table[etype]
+    if etype == Enctype.AES256:
+        t_key = truncate(fullKey, 32)
+    elif etype == Enctype.AES128:
+        t_key = truncate(fullKey, 16)
+    elif etype == Enctype.RC4:
+        raise NotImplementedError('RC4 key truncation documentation missing. it is different from AES')
+
+    key = Key(cipher.enctype, t_key)
+    enc_data = rep['Kerberos']['enc-part']['cipher']
+    dec_data = cipher.decrypt(key, 3, enc_data)
+    encasrep = EncASRepPart.load(dec_data).native
+    cipher = _enctype_table[int(encasrep['key']['keytype'])]
+    session_key = Key(cipher.enctype, encasrep['key']['keyvalue'])
+
+    return session_key, cipher, rep
 
     # remove Octet String manualy
     padata = str(rep['padata'][0]['padata-value']).encode('hex')
@@ -259,12 +199,12 @@ def decrypt_pk_dh(data, user_cert, cert_pass, diffieHellmanExchange):
     kdcSignedDataResponse = decode(decoded, asn1Spec=SignedData())[0]
     kdcDHKeyInfo = str(kdcSignedDataResponse['encapContentInfo']['id-pkinit-authData-value']).encode('hex')
     d = decode(kdcDHKeyInfo.decode('hex'), asn1Spec=KDCDHKeyInfo())[0]
-    dcPublicKey = int(encode(d['subjectPublicKey']).encode('hex')[20:],16)
+    dcPublicKey = int(encode(d['subjectPublicKey']).encode('hex')[20:], 16)
 
     dcPublicNumbers = dh.DHPublicNumbers(dcPublicKey, diffieHellmanExchange[2])
 
     backend = default_backend()
-    
+
     dcPublicKey = backend.load_dh_public_numbers(dcPublicNumbers)
     shared_key = diffieHellmanExchange[1].exchange(dcPublicKey)
     sharedHexKey = shared_key.encode('hex')
@@ -290,7 +230,7 @@ def decrypt_pk_dh(data, user_cert, cert_pass, diffieHellmanExchange):
 
     cipherText = rep['enc-part']['cipher'].asOctets()
     plainText = cipher.decrypt(key, 3, cipherText)
-    encASRepPart = decode(plainText, asn1Spec = EncASRepPart())[0]
-    cipher = _enctype_table[ int(encASRepPart['key']['keytype'])]
+    encASRepPart = decode(plainText, asn1Spec=EncASRepPart())[0]
+    cipher = _enctype_table[int(encASRepPart['key']['keytype'])]
     session_key = Key(cipher.enctype, encASRepPart['key']['keyvalue'].asOctets())
     return session_key, cipher, rep

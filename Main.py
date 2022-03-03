@@ -1,7 +1,6 @@
 import sys
 import os
 import cmd
-import logging
 from threading import Thread, Lock
 import argparse
 import random
@@ -13,24 +12,19 @@ PACKAGE_PARENT = '..'
 SCRIPT_DIR = os.path.dirname(os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(__file__))))
 sys.path.append(os.path.normpath(os.path.join(SCRIPT_DIR, PACKAGE_PARENT)))
 
-import copy
-from impacket import uuid
-from impacket.smb3structs import SMB2_LEASE_NONE
+
 from smbconnection import SMBConnection
 
-from impacket.examples import logger
-from impacket import version
-#from impacket.smbconnection import SMBConnection
+
 from impacket.structure import Structure
 from impacket.examples import remcomsvc
 
-import smb
+from impacket import smb
 
 import transport
-import serviceinstall
+from impacket.examples import serviceinstall
 
 from smb3 import SMB2_DIALECT_21
-from smb3 import SMB3, FILE
 
 class RemComMessage(Structure):
     structure = (

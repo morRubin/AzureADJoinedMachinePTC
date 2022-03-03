@@ -2,9 +2,10 @@ import ctypes
 import random
 import string
 import uuid
-from pyasn1.type import tag, namedtype, univ, constraint, char, useful
+
+from asn1crypto import core
+from minikerberos.protocol.asn1_structs import TAG, PrincipalName
 from enum import Enum
-from pyasn1.codec.der.encoder import encode
 
 class PAC_CREDENTIAL_INFO(ctypes.Structure):
     _fields_ = [("Version", ctypes.c_ulong),
@@ -32,8 +33,8 @@ class Extensions(ctypes.BigEndianStructure):
 def GenerateExtensions(data):
     extensions = Extensions()
     extensions.data_type = 2
-    extensions.data_length = len(data.decode('hex'))
-    return Pack(extensions) + data
+    extensions.data_length = len(data)
+    return Pack(extensions) + data.hex()
 
 class LSAP_TOKEN_INFO_INTEGRITY(ctypes.Structure):
     _fields_ = [("Flags", ctypes.c_ulong), # 0 for full token and 1 for UAC
@@ -139,72 +140,76 @@ class SMB2_SESSION_SETUP_RESPONSE(ctypes.Structure):
                 ("Buffer", ctypes.c_ulong)
                 ]
 
-def _sequence_component(name, tag_value, type, **subkwargs):
-    return namedtype.NamedType(name, type.subtype(
-        explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatSimple,
-                            tag_value),
-        **subkwargs))
+class CertIssuer(core.Sequence):
+    _fields = [
+        ('1', core.ObjectIdentifier),
+        ('Info', core.BMPString)
+    ]
 
-class ClientInfo(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        _sequence_component('clientType', 0, univ.Integer()),
-        _sequence_component('clientName', 1, univ.SequenceOf(char.GeneralString())),
-    )
+class CertIssuers(core.Sequence):
+    _fields = [
+        ('certIssuer', core.Any, {'tag_type': TAG, 'tag': 0})
+    ]
 
-class Info(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        _sequence_component('pku2u', 0, char.GeneralString()),
-        _sequence_component('clientInfo', 1, ClientInfo()),
-    )
+class SetOfCertIssuers(core.SetOf):
+    _child_spec = CertIssuer
 
+class SequenceCertIssuers2(core.Sequence):
+    _fields = [
+        ('certIssuers', SetOfCertIssuers)
+    ]
 
-class CertIssuer(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        namedtype.NamedType('1', univ.ObjectIdentifier()),
-        namedtype.NamedType('Info', char.BMPString()),
-    )
+class SequenceCertIssuers(core.Sequence):
+    class_ = 2
+    method = 0
+    tag = 0
+    _fields = [
+        ('certIssuers', SequenceCertIssuers2)
+    ]
 
-class CertInfo(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        _sequence_component('certInfo', 0, univ.Any())
-    )
+class ClientInformation(core.Sequence):
+    _fields = [
+        ('pku2u', core.GeneralString, {'tag_type': TAG, 'tag': 0}),
+        ('information', PrincipalName, {'tag_type': TAG, 'tag': 1})
+    ]
 
-class CertInfos(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        namedtype.NamedType('certInfos', CertInfo())
-    )
+class Seq1(core.Sequence):
+    _fields = [
+        ('1', SequenceCertIssuers)
+    ]
 
-def _c(n, t):
-    return t.clone(tagSet=t.tagSet + tag.Tag(tag.tagClassContext, tag.tagFormatSimple, n))
+class Seq2(core.Sequence):
+    _fields = [
+        ('2', Seq1)
+    ]
 
-class CertIssuers(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        namedtype.NamedType('certIssuer', _c(0, univ.Any()))
-    )
+class MetaData(core.Sequence):
+    _fields = [
+        ('SequenceCertIssuers', Seq2, {'tag_type': TAG, 'tag': 0}),
+        ('ClientInfo', ClientInformation, {'tag_type': TAG, 'tag': 1})
+    ]
 
-class MetaData(univ.Sequence):
-    componentType = namedtype.NamedTypes(
-        _sequence_component('1', 0, univ.SequenceOf(CertIssuers())),
-        _sequence_component('Info', 1, Info()),
-    )
 
 def generateMetaDataAsn(remoteComputer, issuer):
-    data = MetaData()
-    a = univ.SequenceOf(univ.SetOf(CertIssuer()))
-    a[0][0]['1'] = '2.5.4.3'
-    a[0][0]['Info'] = issuer.encode("utf-16-be")
-    data['1'][0]['certIssuer'] = encode(a)
-    data['Info']['pku2u'] = "WELLKNOWN:PKU2U"
-    data['Info']['clientInfo']['clientType'] = -128
-    data['Info']['clientInfo']['clientName'][0] = remoteComputer
+    certIssuer = {'1': '2.5.4.3', 'Info': issuer}
+    setOfCertIssuers = [certIssuer]
+    sequenceCertIssuers = {'certIssuers': setOfCertIssuers}
+    seq1 = {'1': SequenceCertIssuers({'certIssuers': SequenceCertIssuers2(sequenceCertIssuers)})}
+    seq2 = {'2': seq1}
 
-    data1 = CertInfos()
-    data1['certInfos']['certInfo'] = encode(a)
+    clientInformation = {'pku2u': "WELLKNOWN:PKU2U",
+        'information': PrincipalName({'name-type': -128, 'name-string': [remoteComputer]})}
 
-    return encode(data).encode('hex')
+    data = {}
+    data['ClientInfo'] = ClientInformation(clientInformation)
+    data['SequenceCertIssuers'] = Seq2(seq2)
+
+    data = MetaData(data).dump().hex()
+
+    return data
 
 
-toHex = lambda x: "".join([hex(ord(c))[2:].zfill(2) for c in x])
+toHex = lambda x: "".join([hex(c)[2:].zfill(2) for c in x])
 
 def Pack(ctype_instance):
     buf = toHex(ctypes.string_at(ctypes.byref(ctype_instance), ctypes.sizeof(ctype_instance)))
@@ -216,8 +221,6 @@ def Unpack(ctype, buf):
     return ctype_instance
 
 def generateInitiatorNego():
-    CONVERSATION_ID = uuid.uuid4().hex
-
     d = '3bfe3cf76c6d01ea3aff5261bf7d0a4a'
     L = [int(a+b,16) for a,b in zip(d[0::2],d[1::2])] # change from d to CONVERSATION_ID
 
@@ -262,106 +265,11 @@ def generateInitiatorNego():
 
     return Pack(initNego)
 
-def generateMetaData():
-    d = '3bfe3cf76c6d01ea3aff5261bf7d0a4a'
-    L = [int(a + b, 16) for a, b in zip(d[0::2], d[1::2])]  # change from d to CONVERSATION_ID
-
-    guidIn16Bytes = (ctypes.c_ubyte * 16)(*L)
-
-    longnegoex = int(toHex("NEGOEXTS"), 16)
-
-    authschem = '5c33530deaf90d4db2ec4ae3786ec308'
-    authsc = [int(a + b, 16) for a, b in zip(authschem[0::2], authschem[1::2])]  # change from d to AUTH_SCHEME
-    authschemIn16Bytes = (ctypes.c_ubyte * 16)(*authsc)
-
-    signature = WST_MESSAGE_SIGNATURE(longnegoex)
-
-    header2 = WST_MESSAGE_HEADER(signature,
-                                2,
-                                3, # change to 1
-                                0,# change to ctypes.sizeof(header) + 8,
-                                207,# should be 112,  # should be calculated as all initiator nego
-                                guidIn16Bytes
-                                )
-
-    exchange2 = WST_BYTE_VECTOR(64, # should be ctypes.sizeof(header) + 8,
-                               int(len(data) / 2),
-                               0)
-
-    exchangeMsg2 = WST_EXCHANGE_MESSAGE(header2,
-                                       authschemIn16Bytes,
-                                       exchange2)
-
-    header = WST_MESSAGE_HEADER(signature,
-                                 2,
-                                 1,  # change to 1
-                                 ctypes.sizeof(header2) + 24,
-                                 ctypes.sizeof(exchangeMsg2) + int(len(data) / 2),
-                                 guidIn16Bytes
-                                 )
-
-    exchange = WST_BYTE_VECTOR(ctypes.sizeof(header) + 24,
-                                int(len(data) / 2),
-                                0)
-
-    exchangeMsg = WST_EXCHANGE_MESSAGE(header,
-                                        authschemIn16Bytes,
-                                        exchange)
-
-    return Pack(exchangeMsg) + data
-
-def generateApRequest(): # same struct as meta data
-    d = '3bfe3cf76c6d01ea3aff5261bf7d0a4a'
-    L = [int(a + b, 16) for a, b in zip(d[0::2], d[1::2])]  # change from d to CONVERSATION_ID
-
-    guidIn16Bytes = (ctypes.c_ubyte * 16)(*L)
-
-    longnegoex = int(toHex("NEGOEXTS"), 16)
-
-    authschem = '5c33530deaf90d4db2ec4ae3786ec308'
-    authsc = [int(a + b, 16) for a, b in zip(authschem[0::2], authschem[1::2])]  # change from d to AUTH_SCHEME
-    authschemIn16Bytes = (ctypes.c_ubyte * 16)(*authsc)
-
-    signature = WST_MESSAGE_SIGNATURE(longnegoex)
-
-    header2 = WST_MESSAGE_HEADER(signature,
-                                 5,
-                                 4,  # change to 2
-                                 0,
-                                 0,
-                                 guidIn16Bytes
-                                 )
-
-    exchange2 = WST_BYTE_VECTOR(64,  # should be ctypes.sizeof(header) + 8,
-                                int(len(data) / 2),
-                                0)
-
-    exchangeMsg2 = WST_EXCHANGE_MESSAGE(header2,
-                                        authschemIn16Bytes,
-                                        exchange2)
-
-    header = WST_MESSAGE_HEADER(signature,
-                                5,
-                                2,
-                                ctypes.sizeof(header2) + 24,
-                                ctypes.sizeof(exchangeMsg2) + int(len(data) / 2),
-                                guidIn16Bytes
-                                )
-
-    exchange = WST_BYTE_VECTOR(ctypes.sizeof(header) + 24,
-                               int(len(data) / 2),
-                               0)
-
-    ApRequestMsg = WST_EXCHANGE_MESSAGE(header,
-                                       authschemIn16Bytes,
-                                       exchange)
-
-    return Pack(ApRequestMsg) + data
 
 def splitStructs(data, nego):
     # each struct statswith NEGOEXTS
-    structs = data.split(str(toHex("NEGOEXTS")))
-    returnStructs = [str(toHex("NEGOEXTS")) + i for i in structs if i != '']
+    structs = data.split(bytes("NEGOEXTS", 'utf-8').hex())
+    returnStructs = [bytes("NEGOEXTS", 'utf-8').hex() + i for i in structs if i != '']
     # raise sequence number for every struct got
     for struct in structs:
         if struct == '':
@@ -370,10 +278,10 @@ def splitStructs(data, nego):
     for struct in structs:
         if struct == '':
             continue
-        if struct.startswith("{0:0{1}x}".format(MessageTypes.CHALLENGE.value,2)):
-            structData = str(toHex("NEGOEXTS")) + struct
+        if struct.startswith("{0:0{1}x}".format(MessageTypes.CHALLENGE.value, 2)):
+            structData = bytes("NEGOEXTS", 'utf-8').hex() + struct
             
-            exchange = Unpack(WST_EXCHANGE_MESSAGE, structData)._fields_[2][1]
+            exchange = Unpack(WST_EXCHANGE_MESSAGE, bytes.fromhex(structData))._fields_[2][1]
             # exchange starts from header + authscheme (40 + 16)
             # then we calculate ExchangeByteCount, ExchangeOffset, ExchangePad
             # and then AS response starts
