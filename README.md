@@ -30,4 +30,4 @@ MIT
 * [Benjamin Delpy](https://twitter.com/gentilkiwi) for implementing Kerberos parts in [kekeo](https://github.com/gentilkiwi/kekeo)
 * [SkelSec](https://twitter.com/skelsec) for [minikerberos](https://github.com/skelsec/minikerberos/tree/master/minikerberos)
 * Alberto Solino and the team at SecureAuthCorp for [impacket](https://github.com/SecureAuthCorp/impacket)
-* [Dirk Jan](https://twitter.com/_dirkjan) for implementing PKINIT on Pyhthon3 [PKINITtools](https://github.com/dirkjanm/PKINITtools)
+* [Dirk Jan](https://twitter.com/_dirkjan) for implementing PKINIT on Python3 [PKINITtools](https://github.com/dirkjanm/PKINITtools)
